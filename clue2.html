@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Secret Clue</title>
+<style>
+  :root { --bg:#0f0f14; --card:#171923; --text:#b609eb; --muted:#aa6fad; --accent:#8b5cf6; --ok:#22c55e; --bad:#ef4444; }
+  body { margin:0; background:linear-gradient(180deg,#db07f2,#59096b); color:var(--text); font:16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Inter, Helvetica, Arial, sans-serif; display:grid; place-items:center; min-height:100dvh; }
+  .card { width:min(720px,92vw); background:var(--card); border:1px solid #232538; border-radius:18px; padding:22px; box-shadow:0 8px 40px rgba(0,0,0,.35); }
+  h1 { font-size:1.25rem; margin:0 0 8px; letter-spacing:.2px; }
+  p.hint { margin:0 0 18px; color:var(--muted); }
+  .row { display:flex; gap:10px; }
+  input[type="text"] { flex:1; background:#0f111a; color:var(--text); border:1px solid #24263a; border-radius:12px; padding:12px 14px; outline:none; }
+  input[type="text"]::placeholder { color:#70738a; }
+  button { background:var(--accent); color:white; border:0; border-radius:12px; padding:12px 16px; font-weight:600; cursor:pointer; }
+  button:active { transform:translateY(1px); }
+  .result { margin-top:14px; min-height:22px; color:var(--muted); }
+  .hidden { display:none; }
+
+  /* Popup (nice modal instead of alert) */
+  .popup-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.55); display:grid; place-items:center; z-index:50; }
+  .popup { width:min(560px,92vw); background:#10121b; color:var(--text); border:1px solid #24263a; border-radius:16px; padding:20px; box-shadow:0 10px 50px rgba(0,0,0,.5); text-align:center; }
+  .popup h2 { margin:0 0 6px; }
+  .popup.ok h2 { color:var(--ok); }
+  .popup.bad h2 { color:var(--bad); }
+  .popup p { margin:0 0 16px; color:#c9cbe0; }
+  .popup .actions { display:flex; justify-content:center; gap:10px; }
+  .heart { font-size:40px; margin:10px 0 4px; }
+  .next { display:inline-block; margin-top:10px; padding:10px 14px; border-radius:12px; background:linear-gradient(90deg,#8b5cf6,#06b6d4); color:white; text-decoration:none; font-weight:700; }
+</style>
+</head>
+<body>
+
+  <div class="card">
+    <h1>Clue #1</h1>
+    <p class="hint"> 💝 What was my question to you at our "cursed hour" or for me our "blessed hour"?
+
+    <div class="row">
+      <input id="answer" type="text" placeholder="Type your answer..." autocomplete="off" />
+      <button id="check">Check</button>
+    </div>
+
+    <div class="result" id="result"></div>
+
+    <!-- Success content (initially hidden; revealed after correct answer) -->
+    <div id="successReveal" class="hidden" style="margin-top:16px; text-align:center;">
+      <div class="heart">🩷</div>
+      <a id="nextLink" class="next" href="#" target="_blank" rel="noopener">Next clue →</a>
+    </div>
+  </div>
+
+  <!-- Popup Template (created dynamically) -->
+
+<script>
+/* =========================
+   CONFIG — EDIT FOR EACH CLUE
+   ========================= */
+const CONFIG = {
+  // If this clue is a date-type answer, set the day & month that should count as correct.
+  // Month is 1–12. Day is 1–31.
+  correctDay: ,
+  correctMonth: , // May
+
+  // Additionally allow custom strings (normalized; see notes). Add as many as you want.
+  // Examples: "junesixth", "firstkisspark", etc.
+  extraAccepted: ["canyoubemine", "canyoubemine?"],
+
+  // Where to send her after success:
+  nextUrl: "https://www.notion.so/5-Months-of-Uss-3-291785c7647480b49eb1e3a5fceac2ee?source=copy_link", // ← change this
+  // Popup texts:
+  successTitle: "There ya go cutiee",
+  successBody: "You are doing so gooddd",
+  failTitle: "Nooo",
+  failBody: "You know it babyy try againn"
+};
+
+/* =========================
+   LOGIC — NO NEED TO EDIT
+   ========================= */
+
+// Basic month dictionary
+const MONTHS = {
+  january:1, jan:1,
+  february:2, feb:2,
+  march:3, mar:3,
+  april:4, apr:4,
+  may:5,
+  june:6, jun:6,
+  july:7, jul:7,
+  august:8, aug:8,
+  september:9, sept:9, sep:9,
+  october:10, oct:10,
+  november:11, nov:11,
+  december:12, dec:12
+};
+
+// Normalize a string: lowercase, remove punctuation, collapse spaces,
+// remove ordinal suffixes (st/nd/rd/th), convert months to numbers.
+function normalize(str) {
+  let s = (str || "")
+    .toLowerCase()
+    .replace(/[.,\-–—_]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // Remove ordinal suffixes after numbers: 1st -> 1, 2nd -> 2, 3rd -> 3, 4th -> 4
+  s = s.replace(/\b(\d+)(st|nd|rd|th)\b/g, "$1");
+
+  // Tokenize
+  const tokens = s.split(" ").filter(Boolean);
+
+  // Map month names to numbers in-place
+  const mapped = tokens.map(t => MONTHS[t] ? String(MONTHS[t]) : t);
+
+  // Also accept slash formats like 06/09 or 6/9
+  if (/^\d{1,2}\/\d{1,2}$/.test(s)) {
+    const [a, b] = s.split("/").map(n => parseInt(n, 10));
+    // Return both orders (month/day) normalized as "m d"
+    return [`${a} ${b}`, `${b} ${a}`]; // to accept either regional order
+  }
+
+  // Return both original-normalized and “joined” for extraAccepted flexibility
+  return [
+    mapped.join(" "),
+    mapped.join("")
+  ];
+}
+
+// Check if normalized input matches the configured date OR extraAccepted strings
+function isCorrect(userInput) {
+  const norms = normalize(userInput);
+
+  // Date match: look for any pair (m d) in either order with our target month/day
+  const dateTargets = new Set([
+    `${CONFIG.correctMonth} ${CONFIG.correctDay}`,
+    `${CONFIG.correctDay} ${CONFIG.correctMonth}`
+  ]);
+
+  for (const n of norms) {
+    if (dateTargets.has(n)) return true;
+  }
+
+  // Compare against extraAccepted
+  const accepted = CONFIG.extraAccepted.map(a => normalize(a)).flat();
+  for (const n of norms) {
+    if (accepted.includes(n)) return true;
+  }
+  return false;
+}
+
+// Simple modal popup
+function showPopup({ ok, title, body, onClose }) {
+  const backdrop = document.createElement("div");
+  backdrop.className = "popup-backdrop";
+  const modal = document.createElement("div");
+  modal.className = "popup " + (ok ? "ok" : "bad");
+  modal.innerHTML = `
+    <h2>${title}</h2>
+    <p>${body}</p>
+    <div class="actions">
+      <button id="popupClose">${ok ? "Continue" : "Try again"}</button>
+    </div>
+  `;
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
+
+  function close() {
+    document.body.removeChild(backdrop);
+    if (typeof onClose === "function") onClose();
+  }
+  document.getElementById("popupClose").addEventListener("click", close);
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+  window.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); }, { once:true });
+}
+
+// Wire up
+const input = document.getElementById("answer");
+const checkBtn = document.getElementById("check");
+const result = document.getElementById("result");
+const successReveal = document.getElementById("successReveal");
+const nextLink = document.getElementById("nextLink");
+nextLink.href = CONFIG.nextUrl;
+
+function handleCheck() {
+  const val = input.value.trim();
+  if (!val) {
+    showPopup({ ok:false, title:"Oops!", body:"Write an answer first 📝" });
+    return;
+  }
+  const ok = isCorrect(val);
+  if (ok) {
+    showPopup({
+      ok:true,
+      title: CONFIG.successTitle,
+      body: CONFIG.successBody,
+      onClose: () => {
+        successReveal.classList.remove("hidden");
+        result.textContent = "✔️ Correct";
+        result.style.color = "var(--ok)";
+      }
+    });
+  } else {
+    showPopup({
+      ok:false,
+      title: CONFIG.failTitle,
+      body: CONFIG.failBody
+    });
+    result.textContent = "✖️ Try again";
+    result.style.color = "var(--bad)";
+  }
+}
+
+checkBtn.addEventListener("click", handleCheck);
+input.addEventListener("keydown", (e) => { if (e.key === "Enter") handleCheck(); });
+</script>
+</body>
+</html>
+
+
+
